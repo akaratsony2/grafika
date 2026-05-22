@@ -1,0 +1,27 @@
+
+static std::vector<glm::vec3> myPoints = {
+	glm::vec3(-0.8f,  0.0f, 0.0f),  // 1. pont
+	glm::vec3(-0.4f,  0.5f, 0.0f),  // 2. pont
+	glm::vec3(0.0f, -0.3f, 0.0f),  // 3. pont
+	glm::vec3(0.4f,  0.4f, 0.0f),  // 4. pont
+	glm::vec3(0.8f,  0.0f, 0.0f),  // 5. pont
+};
+//-------------------------------------------
+
+
+
+void display(GLFWwindow* window, double currentTime) {
+
+	glClear(GL_COLOR_BUFFER_BIT);
+	glBindVertexArray(VAO[0]);
+//-------------------------------------------
+	GLint colorLoc = glGetUniformLocation(renderingProgram, "uColor");
+	glUniform4f(colorLoc, 1.0f, 1.0f, 1.0f, 1.0f);
+	glDrawArrays(GL_LINE_STRIP, 0, myPoints.size());
+	glUniform4f(colorLoc, 1.0f, 0.0f, 0.0f, 1.0f);
+	glPointSize(15.0f);
+	glDrawArrays(GL_POINTS, 0, myPoints.size());
+	//-------------------------------------------
+
+	glBindVertexArray(0);
+}

@@ -1,0 +1,574 @@
+/*
+https://en.wikipedia.org/wiki/B%C3%A9zier_curve#Explicit_definition
+https://en.wikipedia.org/wiki/Factorial
+https://hu.wikipedia.org/wiki/Binomi%C3%A1lis_egy%C3%BCtthat%C3%B3
+https://hu.frwiki.wiki/wiki/Polyn%C3%B4me_de_Bernstein
+https://plus.maths.org/content/not-just-matter-time-part-1
+https://randomascii.wordpress.com/2012/02/25/comparing-floating-point-numbers-2012-edition/
+*/
+#include <array>
+#include <fstream>
+#include <GL/glew.h>
+#include <GLFW/glfw3.h>
+#include <glm/glm.hpp>
+#include <iostream>
+#include <math.h>
+#include <string>
+#include <vector>
+
+using namespace std;
+
+/* Vektor a görbe pontjainak tárolásához. */
+/* Vector for storing the points of a curve. */
+std::vector<glm::vec3> pointToDraw;
+
+/* Vektor a görbe kontrollpontjainak tárolásához. */
+/* Vector for storing the control points of a curve. */
+std::vector<glm::vec3> myControlPoints = {
+	glm::vec3((100.0f/300.0f)-1.0f, -((200.0f/300.0f)-1.0f), 0.0f),
+	glm::vec3((200.0f / 300.0f) - 1.0f, -((340.0f / 300.0f) - 1.0f), 0.0f),
+	glm::vec3((400.0f / 300.0f) - 1.0f, -((400.0f / 300.0f) - 1.0f), 0.0f),
+	glm::vec3((550.0f / 300.0f) - 1.0f, -((200.0f / 300.0f) - 1.0f), 0.0f),
+
+};
+
+/* Vertex buffer objektum és vertex array objektum az adattároláshoz. */
+/* Vertex buffer object ID and vertex array object ID for data storing. */
+#define		numVBOs			3
+#define		numVAOs			3
+GLuint		VBO[numVBOs];
+GLuint		VAO[numVAOs];
+
+int			window_width = 600;
+int			window_height = 600;
+char		window_title[] = "Bezier Curve";
+/** A normál billentyűk a [0..255] tartományban vannak, a nyilak és a speciális billentyűk pedig a [256..511] tartományban helyezkednek el. */
+/** Normal keys are fom [0..255], arrow and special keys are from [256..511]. */
+GLboolean	keyboard[512] = { GL_FALSE };
+GLFWwindow* window = nullptr;
+GLuint		renderingProgram;
+GLint		dragged = -1;
+
+
+bool checkOpenGLError() {
+	bool	foundError = false;
+	int		glErr = glGetError();
+
+	/** Vizsgáljuk meg, hogy van-e aktuálisan OpenGL hiba, és amennyiben igen, írassuk ki azokat a konzolra egyenként. */
+	/** Check for OpenGL errors, and send them to the console ony by one. */
+	while (glErr != GL_NO_ERROR) {
+		cout << "glError: " << glErr << endl;
+
+		foundError = true;
+		glErr = glGetError();
+	}
+
+	/** Ha van aktuálisan OpenGL hiba, a visszatérési érték true. */
+	/** If there are OpenGL errors, the return value is true. */
+	return foundError;
+}
+
+void printShaderLog(GLuint shader) {
+	int		length = 0;
+	int		charsWritten = 0;
+	char* log = nullptr;
+
+	/** Vizsgáljuk meg, hogy van-e valami a Shader Info Logban, és amennyiben igen, írassuk ki azt a konzolra soronként. */
+	/** Check for Shader Info Log, and send it to the console by lines if it is created for the last compile. */
+	glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &length);
+
+	if (length > 0) {
+		log = (char*)malloc(length);
+
+		/** Olvassuk és írassuk ki a következő sort. */
+		/** Read out and and send to the console the next line. */
+		glGetShaderInfoLog(shader, length, &charsWritten, log);
+		cout << "Shader Info Log: " << log << endl;
+		free(log);
+	}
+}
+
+void printProgramLog(int prog) {
+	int		length = 0;
+	int		charsWritten = 0;
+	char* log = nullptr;
+
+	/** Vizsgáljuk meg, hogy van-e valami a Program Info Logban, és amennyiben igen, írassuk ki azt a konzolra soronként. */
+	/** Check for Program Info Log, and send it to the console by lines if it is created for the last compile. */
+	glGetProgramiv(prog, GL_INFO_LOG_LENGTH, &length);
+
+	if (length > 0) {
+		log = (char*)malloc(length);
+
+		/** Olvassuk és írassuk ki a következő sort. */
+		/** Read out and and send to the console the next line. */
+		glGetProgramInfoLog(prog, length, &charsWritten, log);
+		cout << "Program Info Log: " << log << endl;
+		free(log);
+	}
+}
+
+string readShaderSource(const char* filePath) {
+	/** A file stream inicializálása olvasásra. */
+	/** Let's initialize the file stream for reading. */
+	ifstream	fileStream(filePath, ios::in);
+	string		content;
+	string		line;
+
+	/** A shader fájl sorainak beolvasása EOF jelzésig. (EOF = End Of File) */
+	/** Read in the lines of the shader file until EOF. (EOF = End Of File) */
+	while (!fileStream.eof()) {
+		getline(fileStream, line);
+		/** A shader fájl sorainak összefűzése. */
+		/** Append the lines of the shader file. */
+		content.append(line + "\n");
+	}
+
+	/** A file stream lezárása. */
+	/** Let's close the file stream. */
+	fileStream.close();
+
+	/** Visszatérés a shader fájl tartalmával. */
+	/** Return the content of the shader file. */
+	return content;
+}
+
+GLuint createShaderProgram() {
+	GLint		vertCompiled;
+	GLint		fragCompiled;
+	GLint		linked;
+	/** Beolvassuk a shader fájlok tartalmát. */
+	/** Read in both shader files. */
+	string		vertShaderStr = readShaderSource("vertexShader.glsl");
+	string		fragShaderStr = readShaderSource("fragmentShader.glsl");
+	/** Létrehozzuk a shader objektumokat és eltároljuk az ID-ket. */
+	/** Let's create the shader objects and store the IDs. */
+	GLuint		vShader = glCreateShader(GL_VERTEX_SHADER);
+	GLuint		fShader = glCreateShader(GL_FRAGMENT_SHADER);
+	/** A shader fájlok tartalmát eltároló string objektum szöveggé konvertálásás is elvégezzük. */
+	/** The contents of the shader string objects shall be converted to text of characters. */
+	const char* vertShaderSrc = vertShaderStr.c_str();
+	const char* fragShaderSrc = fragShaderStr.c_str();
+
+	/** Ekkor a betöltött kódot hozzárendelhetjük a shader objektumainkhoz. */
+	/** The loaded source codes are assigned to the shader objects. */
+	glShaderSource(vShader, 1, &vertShaderSrc, NULL);
+	glShaderSource(fShader, 1, &fragShaderSrc, NULL);
+
+	/** Fordítsuk le a vertex shader objektumhoz rendelt kódot. */
+	/** Let's compile the code of the vertex shader object. */
+	glCompileShader(vShader);
+	/** Hibakeresési lépések. Például sikeres volt-e a fordítás? Ha nem, mi volt az oka? */
+	/** Error checking. Was the compile step successful? If not, what was the reason? */
+	checkOpenGLError();
+	glGetShaderiv(vShader, GL_COMPILE_STATUS, &vertCompiled);
+	if (vertCompiled != 1) {
+		cout << "Vertex compilation failed." << endl;
+		printShaderLog(vShader);
+	}
+
+	/** Fordítsuk le a fragment shader objektumhoz rendelt kódot. */
+	/** Let's compile the code of the fragment shader object. */
+	glCompileShader(fShader);
+	/** Hibakeresési lépések. Például sikeres volt-e a fordítás? Ha nem, mi volt az oka? */
+	/** Error checking. Was the compile step successful? If not, what was the reason? */
+	checkOpenGLError();
+	glGetShaderiv(fShader, GL_COMPILE_STATUS, &fragCompiled);
+	if (fragCompiled != 1) {
+		cout << "Fragment compilation failed." << endl;
+		printShaderLog(fShader);
+	}
+
+	/** Shader program objektum létrehozása: ez fogja össze a shadereket. Eltároljuk az ID értéket. */
+	/** Shader program object initialization: holds together the shaders. vfProgram stores the ID. */
+	GLuint		vfProgram = glCreateProgram();
+	/** Csatoljuk a shadereket az előző lépésben létrehozott objektumhoz. */
+	/** The shaders are attached to the program object. */
+	glAttachShader(vfProgram, vShader);
+	glAttachShader(vfProgram, fShader);
+
+	/** Végül a GLSL szerkesztő ellenőrzi, hogy a csatolt shaderek kompatibilisek-e egymással. */
+	/** GLSL linker checks the shaders for compatibility. */
+	glLinkProgram(vfProgram);
+	/** Hibakeresési lépések. Például sikeres volt-e az összeszerkesztés? Ha nem, mi volt az oka? */
+	/** Error checking. Was the link step successful? If not, what was the reason? */
+	checkOpenGLError();
+	glGetProgramiv(vfProgram, GL_LINK_STATUS, &linked);
+	if (linked != 1) {
+		cout << "Shader linking failed." << endl;
+		printProgramLog(vfProgram);
+	}
+
+	/** Ha minden rendben ment a linkelés során, a shader objektumok törölhetőek. */
+	/** If everything is OK at linking, the shader objects can be destroyed. */
+	glDeleteShader(vShader);
+	glDeleteShader(fShader);
+
+	/** Az elkészült program azonosítója a visszatérési értékünk. */
+	/** The program ID will be the return value. */
+	return vfProgram;
+}
+
+/*
+N alatt R kiszámolása a lehetséges átrendezéses optimalizációval.
+*/
+/*
+The definition of N choose R is to compute the two products and divide one with the other,
+(N * (N - 1) * (N - 2) * ... * (N - R + 1)) / (1 * 2 * 3 * ... * R)
+However, the multiplications may become too large really quick and overflow existing data type.
+The implementation trick is to reorder the multiplicationand divisions as,
+(N) / 1 * (N - 1) / 2 * (N - 2) / 3 * ... * (N - R + 1) / R
+It's guaranteed that at each step the results is divisible
+(for n continuous numbers, one of them must be divisible by n, so is the product of these numbers).
+For example, for N choose 3, at least one of the N, N - 1, N - 2 will be a multiple of 3,
+and for N choose 4, at least one of N, N - 1, N - 2, N - 3 will be a multiple of 4.
+*/
+long double NCR(int n, int r) {
+	/* Binomiális együttható. */
+	/* Binomial coefficient. */
+	if (r == 0) return 1;
+
+	/*
+	 Extra computation saving for large R, using property:
+	 N choose R = N choose (N - R)
+	*/
+	if (r > n / 2) return NCR(n, n - r);
+
+	long double result = 1;
+
+	for (int k = 1; k <= r; ++k) {
+		result *= n - k + 1;
+		result /= k;
+	}
+
+	return result;
+}
+
+/*
+It will be the Bernstein basis polynomial of degree n.
+*/
+GLfloat blending(GLint n, GLint i, GLfloat t) {
+	return NCR(n, i) * pow(t, i) * pow(1.0f - t, n - i);
+}
+
+void drawBezierCurve(std::vector<glm::vec3> controlPoints) {
+	/*
+	https://en.wikipedia.org/wiki/B%C3%A9zier_curve#Explicit_definition
+	https://hu.wikipedia.org/wiki/B%C3%A9zier-g%C3%B6rbe
+	*/
+	glm::vec3	nextPoint;
+	GLfloat		t = 0.0f;// , B;
+	GLfloat		increment = 1.0f / 100.0f; /* hány darab szakaszból rakjuk össze a görbénket? */
+
+	while (t <= 1.0f) {
+		nextPoint = glm::vec3(0.0f, 0.0f, 0.0f);
+		for (int i = 0; i < controlPoints.size(); i++) {
+			//B = blending(controlPoints.size() - 1, i, t);
+			nextPoint += blending(controlPoints.size() - 1, i, t) * controlPoints[i];
+			//nextPoint.x += B * controlPoints.at(i).x;
+			//nextPoint.y += B * controlPoints.at(i).y;
+			//nextPoint.z += B * controlPoints.at(i).z;
+		}
+
+		pointToDraw.push_back(nextPoint);
+		t += increment;
+	}
+}
+
+GLfloat dist2(glm::vec3 P1, glm::vec3 P2) {
+	GLfloat		dx = P1.x - P2.x;
+	GLfloat		dy = P1.y - P2.y;
+
+	/** delta X és delta Y segítségével ki tudjuk számolni P1 és P2 pontok távolságának négyzetét. */
+	/** From delta X and delta Y we can calculate the square of the distance of P1 and P2 points. */
+	return dx * dx + dy * dy;
+}
+
+GLint getActivePoint(vector<glm::vec3> p, GLfloat sensitivity, GLfloat x, GLfloat y) {
+	/** Ha az s a sensitivity négyzete, akkor a távolság számításnál és hasonlításnál megtakaríthatunk egy négyzetgyökvonást. Ez jelentős gyorsítás. */
+	/** If s is square of the sensitivity, then we can spare a square root computation at the distance calculations and comparisons. This is a significant speedup. */
+	GLfloat		s = sensitivity * sensitivity;
+	GLint		size = p.size();
+
+	/** xNorm és yNorm a pixelkoordináták [-1..+1] intervallumra transzformált értékei. */
+	/** xNorm and yNorm are the pixelcoordinates transformed to the [-1..+1] interval values. */
+	GLfloat		xNorm = x / ((GLfloat)window_width / 2.0) - 1.0f;
+	GLfloat		yNorm = y / ((GLfloat)window_height / 2.0) - 1.0f;
+	/** mousePos az egér pozíciója, amit paraméterként kapunk. */
+	/** mousePos is the mouse position, arriving as a parameter pair. */
+	glm::vec3	mousePos = glm::vec3(xNorm, yNorm, 0.0f);
+
+	/** Az egyes p pontok távolság négyzetének vizsgálata a mousePos pozíciójához. */
+	/** Checking the square of the distanse of each p to mousePos. */
+	for (GLint i = 0; i < size; i++)
+		if (dist2(p[i], mousePos) < s)
+			/** Ha p közelebb van a sensitivity-ben megadott értéknél, akkor visszatérünk vele, mint megragadott ponttal akkor is, ha van nála közelebbi a vektorban hátrébb. */
+			/** If p is closer than the sensitivity, then it is returned as a grabbed point even if there is closer later in the vector of points. */
+			return i;
+
+	/** Semmi sincs közel az egérhez, -1 jelentése, hogy semmit nem fogtunk meg és vonszolunk magunkkal. */
+	/** Nothing is close to the mouse, -1 means that nothing is grabbed and dragged. */
+	return -1;
+}
+
+void init(GLFWwindow* window) {
+	/** A rajzoláshoz használt shader programok betöltése. */
+	/** Loading the shader programs for rendering. */
+	renderingProgram = createShaderProgram();
+
+	/* A megadott paraméterű Bezier göbe pontjainak meghatározása. */
+	/* Determining the points of the Bezier curve of the given parameters. */
+	drawBezierCurve(myControlPoints);
+
+	/* Létrehozzuk a szükséges vertex buffer és vertex array objektumokat. */
+	/* Create the vertex buffer and vertex array objects. */
+	glGenBuffers(numVBOs, VBO);
+	glGenVertexArrays(numVAOs, VAO);
+
+	glBindVertexArray(VAO[0]);
+	glBindBuffer(GL_ARRAY_BUFFER, VBO[0]);
+	glBufferData(GL_ARRAY_BUFFER, pointToDraw.size() * sizeof(glm::vec3), pointToDraw.data(), GL_STATIC_DRAW);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+	glEnableVertexAttribArray(0);
+
+
+	glBindVertexArray(VAO[1]);
+	glBindBuffer(GL_ARRAY_BUFFER, VBO[1]);
+	glBufferData(GL_ARRAY_BUFFER, myControlPoints.size() * sizeof(glm::vec3), myControlPoints.data(), GL_STATIC_DRAW);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+	glEnableVertexAttribArray(0);
+
+	glBindVertexArray(VAO[2]);
+	glBindBuffer(GL_ARRAY_BUFFER, VBO[2]);
+	glBufferData(GL_ARRAY_BUFFER, myControlPoints.size() * sizeof(glm::vec3), myControlPoints.data(), GL_STATIC_DRAW);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+	glEnableVertexAttribArray(0);
+
+
+
+	glBindVertexArray(0);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+	glUseProgram(renderingProgram);
+
+	glPointSize(10.0f);
+	glLineWidth(5.0f);
+
+	glClearColor(0.0, 0.0, 0.0, 1.0);
+
+	cout << "float\t\t\t" << sizeof(float) << "\n";
+	cout << "double\t\t\t" << sizeof(double) << "\n";
+	cout << "long double\t\t" << sizeof(long double) << "\n";
+	cout << "unsigned\t\t" << sizeof(unsigned) << "\n";
+	cout << "long unsigned\t\t" << sizeof(long unsigned) << "\n";
+	cout << "long long unsigned\t" << sizeof(long long unsigned) << "\n";
+
+	// test for the NCR function
+	for (int j = 0; j < 10; j++) {
+		cout << j << "\n";
+		for (int i = 0; i <= j; i++)
+			cout << i << " " << NCR(j, i) << "  ";
+		cout << "\n";
+	}
+}
+
+void display(GLFWwindow* window, double currentTime) {
+	/* Töröljük le a kiválasztott buffereket! Fontos lehet minden egyes alkalommal törölni! */
+	/* Let's clear the selected buffers! Usually importand to clear it each time! */
+	glClear(GL_COLOR_BUFFER_BIT);
+
+	glBindVertexArray(VAO[0]);
+	GLint colorLoc = glGetUniformLocation(renderingProgram, "uColor");
+	glUniform4f(colorLoc, 1.0f, 1.0f, 1.0f, 1.0f);
+	glDrawArrays(GL_LINE_STRIP, 0, pointToDraw.size());
+
+	glBindVertexArray(VAO[1]);
+	glUniform4f(colorLoc, 1.0f, 0.0f, 0.0f, 1.0f);
+	glDrawArrays(GL_LINE_STRIP, 0, myControlPoints.size());
+	glDrawArrays(GL_POINTS, 0, myControlPoints.size());
+
+	glBindVertexArray(VAO[2]);
+	glUniform4f(colorLoc, 0.0f, 1.0f, 0.0f, 1.0f);
+	glDrawArrays(GL_LINES, 0, 2);
+	glDrawArrays(GL_LINES, 2, 2);
+
+
+	glBindVertexArray(0);
+}
+
+/** Felesleges objektumok törlése. */
+/** Clenup the unnecessary objects. */
+void cleanUpScene() {
+	/** Töröljük a vertex array és a vertex buffer objektumokat. */
+	/** Destroy the vertex array and vertex buffer objects. */
+	glDeleteVertexArrays(numVAOs, VAO);
+	glDeleteBuffers(numVBOs, VBO);
+	/** Töröljük a shader programot. */
+	/** Let's delete the shader program. */
+	glDeleteProgram(renderingProgram);
+	/** Töröljük a GLFW ablakot. */
+	/** Destroy the GLFW window. */
+	glfwDestroyWindow(window);
+	/** Leállítjuk a GLFW-t. */
+	/** Stop the GLFW system. */
+	glfwTerminate();
+	/** Kilépés EXIT_SUCCESS kóddal. */
+	/** Stop the software and exit with EXIT_SUCCESS code. */
+	exit(EXIT_SUCCESS);
+}
+
+void framebufferSizeCallback(GLFWwindow* window, int width, int height) {
+	window_width = width;
+	window_height = height;
+
+	/** A kezelt képernyő beállítása a teljes (0, 0, width, height) területre. */
+	/** Set the viewport for the full (0, 0, width, height) area. */
+	glViewport(0, 0, width, height);
+}
+
+void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
+	/** ESC billentyűre kilépés. */
+	/** Exit on ESC key. */
+	if ((action == GLFW_PRESS) && (key == GLFW_KEY_ESCAPE))
+		cleanUpScene();
+
+	/** A billentyűk lenyomásának és felengedésének regisztrálása. Lehetővé teszi gombkombinációk használatát. */
+	/** Let's register press and release events for keys. Enables the usage of key combinations. */
+	if (action == GLFW_PRESS)
+		keyboard[key] = GL_TRUE;
+	else if (action == GLFW_RELEASE)
+		keyboard[key] = GL_FALSE;
+}
+
+void cursorPosCallback(GLFWwindow* window, double xPos, double yPos) {
+	/** Az egér mutató helyét kezelő függvény. */
+	/** Callback function for mouse position change. */
+
+	if (dragged >= 0) {
+		/** Ha vonszolunk egy pontot, akkor számoljuk ki a normalizált koordinátáit. */
+		/** If we are dragging a point, let's calculate the normalized values. */
+		GLfloat	xNorm = xPos / ((GLfloat)window_width / 2.0f) - 1.0f;
+		GLfloat	yNorm = ((GLfloat)window_height - yPos) / ((GLfloat)window_height / 2.0f) - 1.0f;
+
+		/** Tároljuk el a módosított értékeket. */
+		/** Let's store the modified values. */
+		myControlPoints.at(dragged).x = xNorm;
+		myControlPoints[dragged].x = xNorm;
+		myControlPoints.at(dragged).y = yNorm;
+		pointToDraw.clear();
+		drawBezierCurve(myControlPoints);
+		/** Mozgassuk a módosított értékeket a GPU memóriájába. */
+		/** Let's transfer the modified values to the GPU. */
+		glBindBuffer(GL_ARRAY_BUFFER, VBO[0]);
+		glBufferData(GL_ARRAY_BUFFER, pointToDraw.size() * sizeof(glm::vec3), pointToDraw.data(), GL_STATIC_DRAW);
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+		glBindBuffer(GL_ARRAY_BUFFER, VBO[1]);
+		glBufferData(GL_ARRAY_BUFFER, myControlPoints.size() * sizeof(glm::vec3), myControlPoints.data(), GL_STATIC_DRAW);
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+		glBindBuffer(GL_ARRAY_BUFFER, VBO[2]);
+		glBufferData(GL_ARRAY_BUFFER, myControlPoints.size() * sizeof(glm::vec3), myControlPoints.data(), GL_STATIC_DRAW);
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+	}
+}
+
+void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
+	/** Az egér gombjaihoz köthető események kezelése. */
+	/** Callback function for mouse button events. */
+
+	/** Az egér bal gombjának megnyomása indíthat el vonszolást. */
+	/** Pressing left mouse button might initiate dragging. */
+	if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
+		double	x, y;
+
+		/** Kinyerjük az egérkurzor pixelkoordinátáit. */
+		/** Obtain the pixel coordinates of the mouse. */
+		glfwGetCursorPos(window, &x, &y);
+		/** dragged lesz az indexe a kiválasztott pontnak [0, 1, ...], -1 jelentése, hogy semmit nem fogtunk meg. */
+		/** dragged is the index of the point that is selected [0, 1, ...], -1 means nothing is grabbed. */
+		dragged = getActivePoint(myControlPoints, 0.1f, x, window_height - y);
+	}
+
+	/** Az egér bal gombjának felengedése mindenképp megszünteti a vonszolási üzemmódot. */
+	/** Releasing left mouse button stops dragging operation, even if it was not active before. */
+	if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE)
+		dragged = -1;
+}
+
+
+int main(void) {
+	/** Próbáljuk meg inicializálni a GLFW-t! */
+	/** Try to initialize GLFW! */
+	if (!glfwInit())
+		exit(EXIT_FAILURE);
+
+	/** A használni kívánt OpenGL verzió: 4.3. */
+	/** The needed OpenGL version: 4.3. */
+	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+	//	glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE); // To make macOS happy; should not be needed.
+	/** Próbáljuk meg létrehozni az ablakunkat. */
+	/** Let's try to create a window for drawing. */
+	/** GLFWwindow* glfwCreateWindow(int width, int height, const char* title, GLFWmonitor * monitor, GLFWwindow * share) */
+	window = glfwCreateWindow(window_width, window_height, window_title, nullptr, nullptr);
+
+	/** Válasszuk ki az ablakunk OpenGL kontextusát, hogy használhassuk. */
+	/** Select the OpenGL context (window) for drawing. */
+	glfwMakeContextCurrent(window);
+
+	/** A képernyő átméretezés kezelése. */
+	/** Callback function for window size change. */
+	glfwSetFramebufferSizeCallback(window, framebufferSizeCallback);
+	/** Billentyűzethez köthető események kezelése. */
+	/** Callback function for keyboard events. */
+	glfwSetKeyCallback(window, keyCallback);
+	/** Az egér mutató helyét kezelő függvény megadása. */
+	/** Callback function for mouse position change. */
+	glfwSetCursorPosCallback(window, cursorPosCallback);
+	/** Az egér gombjaihoz köthető események kezelése. */
+	/** Callback function for mouse button events. */
+	glfwSetMouseButtonCallback(window, mouseButtonCallback);
+
+	/** Incializáljuk a GLEW-t, hogy elérhetővé váljanak az OpenGL függvények, probléma esetén kilépés EXIT_FAILURE értékkel. */
+	/** Initalize GLEW, so the OpenGL functions will be available, on problem exit with EXIT_FAILURE code. */
+	if (glewInit() != GLEW_OK)
+		exit(EXIT_FAILURE);
+
+	/** 0 = v-sync kikapcsolva, 1 = v-sync bekapcsolva, n = n db képkockányi időt várakozunk */
+	/** 0 = v-sync off, 1 = v-sync on, n = n pieces frame time waiting */
+	glfwSwapInterval(1);
+
+	/** A window ablak minimum és maximum szélességének és magasságának beállítása. */
+	/** The minimum and maximum width and height values of the window object. */
+	glfwSetWindowSizeLimits(window, 400, 400, 800, 800);
+	/** A window oldalarányának megadása a számláló és az osztó segítségével. */
+	/** Setting the aspect ratio using the numerator and the denominator values. */
+	glfwSetWindowAspectRatio(window, 1, 1);
+
+	/** Az alkalmazáshoz kapcsolódó előkészítő lépések, pl. a shader objektumok létrehozása. */
+	/** The first initialization steps of the program, e.g.: creating the shader objects. */
+	init(window);
+
+	/** A megadott window struktúra "close flag" vizsgálata. */
+	/** Checks the "close flag" of the specified window. */
+	while (!glfwWindowShouldClose(window)) {
+		/** A kód, amellyel rajzolni tudunk a GLFWwindow objektumunkba. */
+		/** Call display function which will draw into the GLFWwindow object. */
+		display(window, glfwGetTime());
+		/** Double buffered működés. */
+		/** Double buffered working = swap the front and back buffer here. */
+		glfwSwapBuffers(window);
+		/** Események kezelése az ablakunkkal kapcsolatban, pl. gombnyomás. */
+		/** Handle events related to our window, e.g.: pressing a key or moving the mouse. */
+		glfwPollEvents();
+	}
+
+	/** Felesleges objektumok törlése. */
+	/** Clenup the unnecessary objects. */
+	cleanUpScene();
+
+	/** Kilépés EXIT_SUCCESS kóddal. */
+	/** Stop the software and exit with EXIT_SUCCESS code. */
+	return EXIT_SUCCESS;
+}
